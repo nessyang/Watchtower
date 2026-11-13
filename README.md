@@ -41,6 +41,25 @@ Watchtower adds an **independent second read plus a mandatory human checkpoint**
 | **Readings disagree — discrepancy detected** | The independent reading differs from the ALPR reading | Treat the ALPR alert as unconfirmed. Examine the image before any action. |
 | **Image unreadable — inconclusive, manual review required** | No plate text found, or AI confidence below the threshold | The ALPR reading cannot be corroborated by this tool. Review manually. |
 
+### Step 2: alert corroboration checks
+
+A correct plate read only answers "what characters are on this plate?". Wrongful stops
+also happen when the hot-list entry is stale, when the car doesn't match the description,
+or when nobody actually confirmed anything. After the plate verification, Watchtower runs
+three automated checks against **fictional incident records** (`data/incidents.json`):
+
+| Check | Met when | Not met when |
+|---|---|---|
+| **Suspect plate is known** | An *active* record lists the ALPR plate **and** the independent reading agrees | No record, the record is `cleared` (stale alert), or the independent reading differs (a misread that happens to hit a listed plate). *Needs review* if the image was unreadable. |
+| **Distinctive vehicle features match** | At least 2 observed features (color, make, model, distinctive marks) match the record, and none contradict it | Any observed feature contradicts the record. *Needs review* if too little is visible. |
+| **Independent corroboration documented** | An independent method is logged, with a reviewer ID and a note of at least 20 characters | Nothing logged, or only "ALPR alert only" / "Watchtower AI agreement". Automated systems cannot corroborate themselves. |
+
+Any check that is not met gives an overall **"Do not act on this alert"**. Even when all
+three are met, the result is only **"ready for a human decision"**. Watchtower never
+authorizes a stop, and the exported record always has `"authorizes_action": false`.
+The fictional records contain plate, vehicle description and a fictional reason only:
+no owner names, addresses or other personal data.
+
 ---
 
 ## Quick start (local)
@@ -73,18 +92,22 @@ Then open <http://localhost:8501>.
 
 ### Demo scenarios
 
-| # | Image (fictional) | Simulated ALPR reading | Expected outcome |
-|---|---|---|---|
-| 1 | `BXR 4827`, clear | `BXR 4827` | Agree (human verification still required) |
-| 2 | `DKT 8150`, clear | `DKT B150` | Disagree, with 8↔B flagged as a commonly confused pair |
-| 3 | `HWN 3392`, clear | `HWN 3329` | Disagree (transposed digits) |
-| 4 | `CPL 6604`, night blur | `CPL 6604` | Inconclusive (the ALPR's confident read can't be corroborated) |
-| 5 | `ELM 2045`, staged vehicle photo | `ELM 2045` | Agree (human verification still required) |
+| # | Image (fictional) | Simulated ALPR reading | Plate outcome | Corroboration checks (plate · features · corroboration) |
+|---|---|---|---|---|
+| 1 | `BXR 4827`, clear | `BXR 4827` | Agree (human verification still required) | Met · Met · Not met until you fill in the corroboration log, then **all met** |
+| 2 | `DKT 8150`, clear | `DKT B150` | Disagree, with 8↔B flagged as commonly confused | Not met (misread hits a listed plate) · Not met · Not met |
+| 3 | `HWN 3392`, clear | `HWN 3329` | Disagree (transposed digits) | Not met · Not met (one feature matches, color doesn't) · Not met |
+| 4 | `CPL 6604`, night blur | `CPL 6604` | Inconclusive | Needs review · Needs review · Not met |
+| 5 | `ELM 2045`, staged vehicle photo | `ELM 2045` | Agree | Met · **Not met (record says blue, car is red)** · Not met |
+
+Each scenario pre-fills staged "reviewer observations" of the vehicle. You can edit them,
+and the checks update immediately. A plate the records list as `cleared` (`MTL 7731`)
+shows how stale alerts are caught.
 
 ## Running the tests
 
 ```bash
-pytest                       # everything (47 tests, ~15 s once the model is cached)
+pytest                       # everything (68 tests, ~15 s once the model is cached)
 pytest -m "not integration"  # fast unit tests only; no OCR model needed (~5 s)
 pytest -m integration        # end-to-end with real EasyOCR on the demo images
 ```
@@ -95,6 +118,7 @@ pytest -m integration        # end-to-end with real EasyOCR on the demo images
 | `tests/test_imaging.py` | empty/corrupt/truncated/oversized/tiny/unsupported uploads, RGBA and grayscale handling, quality warnings |
 | `tests/test_ocr_and_verify.py` | plate-text selection heuristics, second-pass OCR, all three outcomes, confidence threshold, input validation (uses a fake OCR backend) |
 | `tests/test_integration_easyocr.py` | the five demo scenarios end-to-end with the real model |
+| `tests/test_checks.py` | record loading and validation, all three corroboration checks, overall summary never authorizes action |
 | `tests/test_app_smoke.py` | the Streamlit page renders, demo pre-fills, Verify is disabled without an image |
 
 ---
@@ -119,7 +143,9 @@ watchtower/
 │   ├── imaging.py                 # safe loading, quality metrics, OCR enhancement, box drawing
 │   ├── ocr.py                     # EasyOCR backend + pure "which text is the plate?" selection
 │   ├── compare.py                 # alignment, edit distance, highlighted segments
-│   └── verify.py                  # the three-outcome decision + JSON review record
+│   ├── verify.py                  # the three-outcome decision + JSON review record
+│   └── checks.py                  # step 2: plate-known / features / corroboration checks
+├── data/incidents.json            # FICTIONAL incident records (no personal data)
 ├── scripts/make_samples.py        # generates the fictional demo images
 ├── samples/                       # staged demo images ("SAMPLE - NOT A REAL PLATE")
 ├── tests/
@@ -177,6 +203,9 @@ Be honest about these when presenting:
   image. That is why agreement still requires human verification.
 * **Synthetic demo data.** The demo images are rendered with Pillow, so real-world accuracy
   will be lower, especially for night, snow, glare, angled, or partially covered plates.
+* **Feature matching is only as good as the observations.** Color names are subjective
+  ("silver" vs "gray"), and make/model are typed by the reviewer, not detected from the
+  image. The check catches contradictions; it can't prove a match.
 * **Simulated ALPR input.** The ALPR reading is typed by the user. There is no integration
   with any vendor, by design.
 * **CPU performance.** Roughly 1–5 s per image on a laptop. That is fine for a review

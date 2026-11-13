@@ -1,0 +1,65 @@
+{
+  "_notice": "FICTIONAL records for demonstration only. Not from any police system. No owner or personal data.",
+  "records": [
+    {
+      "incident_id": "INC-2026-0141",
+      "plate": "BXR 4827",
+      "state": "MI",
+      "status": "active",
+      "reason": "Stolen vehicle report (fictional)",
+      "entered": "2026-11-02",
+      "vehicle": {"color": "Silver", "make": "Honda", "model": "Civic",
+                  "features": ["Roof rack", "Dented rear bumper"]}
+    },
+    {
+      "incident_id": "INC-2026-0187",
+      "plate": "DKT B150",
+      "state": "MI",
+      "status": "active",
+      "reason": "Vehicle sought after a hit-and-run (fictional)",
+      "entered": "2026-11-05",
+      "vehicle": {"color": "White", "make": "Ford", "model": "Escape",
+                  "features": ["Cracked taillight"]}
+    },
+    {
+      "incident_id": "INC-2026-0203",
+      "plate": "HWN 3329",
+      "state": "MI",
+      "status": "active",
+      "reason": "Stolen vehicle report (fictional)",
+      "entered": "2026-11-07",
+      "vehicle": {"color": "Green", "make": "Subaru", "model": "Outback",
+                  "features": ["Bike rack"]}
+    },
+    {
+      "incident_id": "INC-2026-0215",
+      "plate": "CPL 6604",
+      "state": "MI",
+      "status": "active",
+      "reason": "Stolen vehicle report (fictional)",
+      "entered": "2026-11-09",
+      "vehicle": {"color": "Black", "make": "Chevrolet", "model": "Silverado",
+                  "features": ["Ladder rack"]}
+    },
+    {
+      "incident_id": "INC-2026-0230",
+      "plate": "ELM 2045",
+      "state": "MI",
+      "status": "active",
+      "reason": "Vehicle sought as possible witness vehicle (fictional)",
+      "entered": "2026-11-10",
+      "vehicle": {"color": "Blue", "make": "Chevrolet", "model": "Malibu",
+                  "features": ["Tinted windows"]}
+    },
+    {
+      "incident_id": "INC-2026-0098",
+      "plate": "MTL 7731",
+      "state": "MI",
+      "status": "cleared",
+      "reason": "Stolen vehicle report (fictional) — vehicle recovered",
+      "entered": "2026-09-14",
+      "vehicle": {"color": "Gray", "make": "Toyota", "model": "Camry",
+                  "features": []}
+    }
+  ]
+}

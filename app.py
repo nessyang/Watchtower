@@ -16,6 +16,17 @@ from pathlib import Path
 
 import streamlit as st
 
+from watchtower.checks import (
+    INDEPENDENT_METHODS,
+    NON_INDEPENDENT_METHODS,
+    CheckStatus,
+    CheckSummary,
+    CorroborationLog,
+    RecordError,
+    VehicleDescription,
+    load_records,
+    run_checks,
+)
 from watchtower.compare import EQUAL, Comparison
 from watchtower.imaging import ImageError, draw_box, load_image
 from watchtower.ocr import PlateReader
@@ -37,20 +48,41 @@ class Scenario:
     image: str
     alpr: str
     story: str
+    observed: VehicleDescription = VehicleDescription()  # staged reviewer observations
 
 
 SCENARIOS = [
     Scenario("1 · Clear plate, readings match", "plate_clear.png", "BXR 4827",
-             "ALPR reading matches the plate. Still requires a human check."),
+             "ALPR reading matches the plate and the observed car matches the record. "
+             "Document corroboration in step 2 to see all checks met.",
+             VehicleDescription("Silver", "Honda", "Civic", ("Roof rack",))),
     Scenario("2 · ALPR misread (8 → B)", "plate_confusable.png", "DKT B150",
-             "A classic OCR confusion: the ALPR system read the digit 8 as the letter B."),
+             "The ALPR read 8 as B — and DKT B150 happens to be on a record. "
+             "A textbook wrongful-stop setup.",
+             VehicleDescription("Black", "Toyota", "Camry")),
     Scenario("3 · Transposed digits", "plate_mismatch.png", "HWN 3329",
-             "The ALPR reading has two digits swapped — a different plate entirely."),
+             "Two digits swapped, landing on a listed plate. One feature coincidentally "
+             "matches; the color does not.",
+             VehicleDescription("Gray", "Jeep", "Cherokee", ("Bike rack",))),
     Scenario("4 · Unreadable capture", "plate_unreadable.png", "CPL 6604",
-             "Night-time motion blur. The ALPR system still produced a confident read."),
+             "Night-time motion blur. The ALPR system still produced a confident read, "
+             "but nothing can be confirmed.",
+             VehicleDescription()),
     Scenario("5 · Vehicle photo", "vehicle_scene.png", "ELM 2045",
-             "A full (staged) vehicle photo instead of a cropped plate."),
+             "The plate reads correctly — but the record describes a blue car and this "
+             "one is red (data-entry error or swapped plate?).",
+             VehicleDescription(color="Red")),
 ]
+
+COLORS = ["Not visible", "Black", "White", "Silver", "Gray", "Red", "Blue",
+          "Green", "Brown", "Yellow", "Other"]
+EXTRA_FEATURES = ["Bumper sticker", "Missing hubcap", "Aftermarket spoiler", "Tinted windows",
+                  "Bike rack", "Roof rack"]
+CHECK_STYLE = {
+    CheckStatus.MET: ("wt-agree", "✓"),
+    CheckStatus.NOT_MET: ("wt-disagree", "✕"),
+    CheckStatus.NEEDS_REVIEW: ("wt-inconclusive", "?"),
+}
 
 OUTCOME_STYLE = {
     Outcome.AGREE: ("wt-agree", "✓", "Human verification required"),
@@ -61,7 +93,7 @@ OUTCOME_STYLE = {
 REVIEW_CHECKLIST = [
     "Look at the image yourself and read every character of the plate.",
     "Confirm the issuing state / plate type, not just the characters.",
-    "Confirm the vehicle make, model and colour match the hot-list record.",
+    "Confirm the vehicle make, model and color match the hot-list record.",
     "Confirm the hot-list entry is current and was entered for a lawful reason.",
     "Document your independent observations before any action is taken.",
 ]
@@ -100,6 +132,8 @@ CSS = """
 .wt-ch.conf { background:#fef3c7; border-color:#f59e0b; color:#92400e; }
 .wt-ch.gap  { background:repeating-linear-gradient(45deg,#f1f5f9,#f1f5f9 4px,#e2e8f0 4px,#e2e8f0 8px);
               border-style:dashed; color:#94a3b8; }
+.wt-check { height:100%; margin-bottom:14px; }
+.wt-check h3 { font-size:1.05rem; }
 .wt-legend { font-size:.78rem; color:var(--wt-muted); margin-top:6px; }
 .wt-legend span { display:inline-block; width:11px; height:11px; border-radius:3px; margin:0 4px -1px 10px; border:1px solid; }
 [data-testid="stCheckbox"] label, [data-testid="stCheckbox"] label * {
@@ -111,6 +145,11 @@ CSS = """
 }
 </style>
 """
+
+
+@st.cache_data
+def get_records():
+    return load_records()
 
 
 @st.cache_resource(show_spinner="Loading EasyOCR model (first run downloads ~100 MB)…")
@@ -218,13 +257,77 @@ def render_details(result: VerificationResult, image) -> None:
         else:
             st.write("EasyOCR returned no text regions.")
 
-    st.download_button(
-        "Download review record (JSON)",
-        data=json.dumps(result.to_record(), indent=2),
-        file_name="watchtower_review_record.json",
-        mime="application/json",
-        help="Contains readings and scores only — no image and no personal data.",
+
+
+def render_checks(result: VerificationResult, scenario: Scenario | None) -> CheckSummary | None:
+    st.header("Step 2 · Alert corroboration checks")
+    st.caption("Three automated checks against **fictional** incident records. "
+               "They can stop an alert from being acted on; they can never authorize a stop.")
+    try:
+        records = get_records()
+    except RecordError as exc:
+        st.error(f"Incident records unavailable: {exc}")
+        return None
+
+    k = st.session_state.get("result_key", "")[:12]
+    defaults = scenario.observed if scenario else VehicleDescription()
+    record_features = sorted({f for r in records for f in r.vehicle.features} | set(EXTRA_FEATURES))
+
+    obs_col, log_col = st.columns(2, gap="large")
+    with obs_col:
+        st.subheader("Observed vehicle features")
+        st.caption("What a reviewer can see in the image or in person. Leave blank if not visible.")
+        color = st.selectbox("Color", COLORS, key=f"color_{k}",
+                             index=COLORS.index(defaults.color) if defaults.color in COLORS else 0)
+        c1, c2 = st.columns(2)
+        make = c1.text_input("Make", value=defaults.make, key=f"make_{k}")
+        model = c2.text_input("Model", value=defaults.model, key=f"model_{k}")
+        features = st.multiselect("Distinctive features", record_features,
+                                  default=[f for f in defaults.features if f in record_features],
+                                  key=f"features_{k}")
+    with log_col:
+        st.subheader("Corroboration log")
+        st.caption("Automated agreement (ALPR or Watchtower) does not count as corroboration.")
+        methods = st.multiselect("How was the alert corroborated?",
+                                 list(INDEPENDENT_METHODS) + list(NON_INDEPENDENT_METHODS),
+                                 key=f"methods_{k}")
+        reviewer = st.text_input("Reviewer ID (fictional)", key=f"reviewer_{k}",
+                                 placeholder="e.g. R-102")
+        note = st.text_area("What did the reviewer independently observe?", key=f"note_{k}",
+                            placeholder="e.g. Read plate BXR 4827 in person from 3 m in daylight.")
+
+    observed = VehicleDescription("" if color == "Not visible" else color, make, model, tuple(features))
+    summary = run_checks(result, records, observed,
+                         CorroborationLog(tuple(methods), reviewer, note))
+
+    rec = summary.record
+    if rec is not None:
+        v = rec.vehicle
+        st.markdown(
+            f"**Matched fictional record {html.escape(rec.incident_id)}** · status "
+            f"`{rec.status}` · {html.escape(rec.reason)} · entered {html.escape(rec.entered)}  \n"
+            f"Listed vehicle: {html.escape(v.color)} {html.escape(v.make)} {html.escape(v.model)}"
+            + (f" — {html.escape(', '.join(v.features))}" if v.features else "")
+        )
+    else:
+        st.markdown(f"**No fictional record** lists plate `{html.escape(result.alpr_normalized)}`.")
+
+    cols = st.columns(3)
+    for col, check in zip(cols, summary.checks):
+        cls, icon = CHECK_STYLE[check.status]
+        col.markdown(
+            f'<div class="wt-verdict wt-check {cls}"><span class="badge">{icon} '
+            f"{check.status.label}</span><h3>{html.escape(check.name)}</h3>"
+            f"<p>{html.escape(check.detail)}</p></div>",
+            unsafe_allow_html=True,
+        )
+    cls, icon = CHECK_STYLE[summary.status]
+    st.markdown(
+        f'<div class="wt-verdict {cls}"><span class="badge">{icon} Overall</span>'
+        f"<h3>{html.escape(summary.headline)}</h3><p>{html.escape(summary.advice)}</p></div>",
+        unsafe_allow_html=True,
     )
+    return summary
 
 
 def main() -> None:
@@ -333,6 +436,18 @@ def main() -> None:
     if result is not None and image is not None:
         st.divider()
         render_details(result, image)
+        st.divider()
+        summary = render_checks(result, scenario)
+        record = result.to_record()
+        if summary is not None:
+            record["corroboration_checks"] = summary.to_record()
+        st.download_button(
+            "Download review record (JSON)",
+            data=json.dumps(record, indent=2),
+            file_name="watchtower_review_record.json",
+            mime="application/json",
+            help="Readings, scores and check results only — no image and no personal data.",
+        )
 
 
 if __name__ == "__main__":
